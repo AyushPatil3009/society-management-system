@@ -1,0 +1,408 @@
+// Prisma Schema for Society / Apartment Management Platform
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// -----------------------------------------------------------------------------
+// ENUMS
+// -----------------------------------------------------------------------------
+
+enum Role {
+  ADMIN
+  RESIDENT
+  STAFF
+}
+
+enum ResidentType {
+  OWNER
+  TENANT
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  PENDING_APPROVAL
+}
+
+enum OccupancyStatus {
+  VACANT
+  OCCUPIED_OWNER
+  OCCUPIED_TENANT
+}
+
+enum StaffSpecialization {
+  PLUMBING
+  ELECTRICAL
+  CARPENTRY
+  ELEVATOR
+  CLEANING
+  SECURITY
+  GARDENING
+  PAINTING
+  GENERAL
+}
+
+enum ComplaintCategory {
+  PLUMBING
+  ELECTRICAL
+  CARPENTRY
+  ELEVATOR
+  CLEANING
+  SECURITY
+  NOISE
+  COMMON_AREA
+  OTHER
+}
+
+enum ComplaintPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ComplaintStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+  REJECTED
+}
+
+enum NoticePriority {
+  LOW
+  NORMAL
+  IMPORTANT
+  URGENT
+}
+
+enum MaintenanceStatus {
+  PENDING
+  PAID
+  OVERDUE
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  REJECTED
+}
+
+// -----------------------------------------------------------------------------
+// CORE ENTITIES: Society, Building, Flat
+// -----------------------------------------------------------------------------
+
+model Society {
+  id         String   @id @default(cuid())
+  name       String
+  code       String   @unique // Short identifier, e.g. "GREEN-VISTA"
+  address    String
+  city       String
+  state      String
+  postalCode String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  buildings        Building[]
+  users            User[]
+  staffMembers     Staff[]
+  complaints       Complaint[]
+  notices          Notice[]
+  facilities       Facility[]
+  maintenanceBills Maintenance[]
+
+  @@map("societies")
+}
+
+model Building {
+  id        String   @id @default(cuid())
+  name      String // e.g. "Tower A", "Wing B"
+  societyId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  society Society @relation(fields: [societyId], references: [id], onDelete: Cascade)
+  flats   Flat[]
+
+  @@unique([societyId, name])
+  @@index([societyId])
+  @@map("buildings")
+}
+
+model Flat {
+  id              String          @id @default(cuid())
+  flatNumber      String // e.g. "101", "B-402"
+  floor           Int?
+  buildingId      String
+  occupancyStatus OccupancyStatus @default(VACANT)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  building         Building      @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  residents        User[]
+  complaints       Complaint[]
+  maintenanceBills Maintenance[]
+
+  @@unique([buildingId, flatNumber])
+  @@index([buildingId])
+  @@map("flats")
+}
+
+// -----------------------------------------------------------------------------
+// USER & AUTHENTICATION (Auth.js Compatible)
+// -----------------------------------------------------------------------------
+
+model User {
+  id            String        @id @default(cuid())
+  name          String?
+  email         String        @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String? // For Credentials authentication
+  phone         String?
+  role          Role          @default(RESIDENT)
+  residentType  ResidentType? // OWNER or TENANT (relevant if role == RESIDENT)
+  status        UserStatus    @default(ACTIVE)
+
+  societyId String?
+  flatId    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  society Society? @relation(fields: [societyId], references: [id], onDelete: Cascade)
+  flat    Flat?    @relation(fields: [flatId], references: [id], onDelete: SetNull)
+
+  // Auth.js relations
+  accounts Account[]
+  sessions Session[]
+
+  // Application relations
+  staffProfile     Staff?            @relation("UserStaffProfile")
+  complaintsRaised Complaint[]       @relation("ResidentComplaints")
+  complaintUpdates ComplaintUpdate[]
+  noticesCreated   Notice[]          @relation("AdminNotices")
+  facilityBookings FacilityBooking[]
+  maintenancePaid  Maintenance[]     @relation("MaintenancePayer")
+
+  @@index([societyId])
+  @@index([flatId])
+  @@index([role])
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// -----------------------------------------------------------------------------
+// STAFF & VENDORS
+// -----------------------------------------------------------------------------
+
+model Staff {
+  id             String              @id @default(cuid())
+  societyId      String
+  userId         String?             @unique // Linked user account if staff logs into system
+  name           String
+  phone          String
+  specialization StaffSpecialization @default(GENERAL)
+  isAvailable    Boolean             @default(true)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  society            Society     @relation(fields: [societyId], references: [id], onDelete: Cascade)
+  user               User?       @relation("UserStaffProfile", fields: [userId], references: [id], onDelete: SetNull)
+  assignedComplaints Complaint[]
+
+  @@index([societyId])
+  @@index([specialization])
+  @@map("staff")
+}
+
+// -----------------------------------------------------------------------------
+// COMPLAINT WORKFLOW
+// -----------------------------------------------------------------------------
+
+model Complaint {
+  id          String            @id @default(cuid())
+  title       String
+  description String            @db.Text
+  category    ComplaintCategory @default(OTHER)
+  priority    ComplaintPriority @default(MEDIUM)
+  status      ComplaintStatus   @default(OPEN)
+
+  societyId       String
+  flatId          String? // Nullable for common society area issues
+  residentId      String
+  assignedStaffId String?
+
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  society       Society           @relation(fields: [societyId], references: [id], onDelete: Cascade)
+  flat          Flat?             @relation(fields: [flatId], references: [id], onDelete: SetNull)
+  resident      User              @relation("ResidentComplaints", fields: [residentId], references: [id], onDelete: Cascade)
+  assignedStaff Staff?            @relation(fields: [assignedStaffId], references: [id], onDelete: SetNull)
+  updates       ComplaintUpdate[]
+
+  @@index([societyId, status])
+  @@index([residentId])
+  @@index([assignedStaffId])
+  @@index([flatId])
+  @@map("complaints")
+}
+
+model ComplaintUpdate {
+  id          String           @id @default(cuid())
+  complaintId String
+  authorId    String
+  status      ComplaintStatus? // Status change audit (if status changed with this update)
+  comment     String           @db.Text
+  createdAt   DateTime         @default(now())
+
+  complaint Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  author    User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([complaintId])
+  @@index([authorId])
+  @@map("complaint_updates")
+}
+
+// -----------------------------------------------------------------------------
+// NOTICES & ANNOUNCEMENTS
+// -----------------------------------------------------------------------------
+
+model Notice {
+  id        String         @id @default(cuid())
+  societyId String
+  authorId  String // Admin who posted the notice
+  title     String
+  content   String         @db.Text
+  priority  NoticePriority @default(NORMAL)
+  expiresAt DateTime?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  society Society @relation(fields: [societyId], references: [id], onDelete: Cascade)
+  author  User    @relation("AdminNotices", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([societyId, createdAt])
+  @@map("notices")
+}
+
+// -----------------------------------------------------------------------------
+// MAINTENANCE BILLING
+// -----------------------------------------------------------------------------
+
+model Maintenance {
+  id               String            @id @default(cuid())
+  societyId        String
+  flatId           String
+  title            String // e.g. "Maintenance - October 2026"
+  amount           Decimal           @db.Decimal(10, 2)
+  dueDate          DateTime
+  billPeriod       String // Format: "YYYY-MM", e.g. "2026-10"
+  status           MaintenanceStatus @default(PENDING)
+  paidAt           DateTime?
+  paidById         String? // User who made or recorded payment
+  paymentReference String? // Cheque #, UPI Ref, receipt number
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  society Society @relation(fields: [societyId], references: [id], onDelete: Cascade)
+  flat    Flat    @relation(fields: [flatId], references: [id], onDelete: Cascade)
+  paidBy  User?   @relation("MaintenancePayer", fields: [paidById], references: [id], onDelete: SetNull)
+
+  @@unique([flatId, billPeriod])
+  @@index([societyId, status])
+  @@index([flatId])
+  @@map("maintenance_bills")
+}
+
+// -----------------------------------------------------------------------------
+// FACILITIES & BOOKINGS
+// -----------------------------------------------------------------------------
+
+model Facility {
+  id          String   @id @default(cuid())
+  societyId   String
+  name        String // e.g. "Clubhouse", "Party Hall", "Tennis Court"
+  description String?  @db.Text
+  capacity    Int?
+  rules       String?  @db.Text
+  isAvailable Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  society  Society           @relation(fields: [societyId], references: [id], onDelete: Cascade)
+  bookings FacilityBooking[]
+
+  @@unique([societyId, name])
+  @@index([societyId])
+  @@map("facilities")
+}
+
+model FacilityBooking {
+  id         String        @id @default(cuid())
+  facilityId String
+  userId     String // Resident making the booking
+  startTime  DateTime
+  endTime    DateTime
+  status     BookingStatus @default(PENDING)
+  purpose    String?       @db.Text
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  facility Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([facilityId, startTime, endTime])
+  @@index([userId])
+  @@map("facility_bookings")
+}
